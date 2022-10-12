@@ -1696,12 +1696,12 @@ export class VideoModel extends Model<Partial<AttributesOnly<VideoModel>>> {
     let files: VideoFile[] = []
 
     if (Array.isArray(this.VideoFiles)) {
-      const result = videoFilesModelToFormattedJSON(this, this.VideoFiles, includeMagnet)
+      const result = videoFilesModelToFormattedJSON(this, this.VideoFiles, { includeMagnet })
       files = files.concat(result)
     }
 
     for (const p of (this.VideoStreamingPlaylists || [])) {
-      const result = videoFilesModelToFormattedJSON(this, p.VideoFiles, includeMagnet)
+      const result = videoFilesModelToFormattedJSON(this, p.VideoFiles, { includeMagnet })
       files = files.concat(result)
     }
 
@@ -1870,20 +1870,6 @@ export class VideoModel extends Model<Partial<AttributesOnly<VideoModel>>> {
 
   requiresAuth () {
     return this.privacy === VideoPrivacy.PRIVATE || this.privacy === VideoPrivacy.INTERNAL || !!this.VideoBlacklist
-  }
-
-  setPrivacy (newPrivacy: VideoPrivacy) {
-    if (this.privacy === VideoPrivacy.PRIVATE && newPrivacy !== VideoPrivacy.PRIVATE) {
-      this.publishedAt = new Date()
-    }
-
-    this.privacy = newPrivacy
-  }
-
-  isConfidential () {
-    return this.privacy === VideoPrivacy.PRIVATE ||
-      this.privacy === VideoPrivacy.UNLISTED ||
-      this.privacy === VideoPrivacy.INTERNAL
   }
 
   async setNewState (newState: VideoState, isNewVideo: boolean, transaction: Transaction) {

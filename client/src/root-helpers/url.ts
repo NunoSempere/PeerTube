@@ -19,8 +19,19 @@ function objectToUrlEncoded (obj: any) {
   return str.join('&')
 }
 
+function addQueryParams (url: string, params: { [ id: string ]: string }) {
+  const objUrl = new URL(url)
+
+  for (const key of Object.keys(params)) {
+    objUrl.searchParams.append(key, params[key])
+  }
+
+  return objUrl.toString()
+}
+
 export {
   getParamToggle,
+  addQueryParams,
   getParamString,
   objectToUrlEncoded
 }

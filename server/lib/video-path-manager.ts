@@ -2,18 +2,13 @@ import { remove } from 'fs-extra'
 import { extname, join } from 'path'
 import { extractVideo } from '@server/helpers/video'
 import { CONFIG } from '@server/initializers/config'
-import {
-  MStreamingPlaylistVideo,
-  MVideo,
-  MVideoFile,
-  MVideoFileStreamingPlaylistVideo,
-  MVideoFileVideo,
-  MVideoUUID
-} from '@server/types/models'
+import { DIRECTORIES } from '@server/initializers/constants'
+import { MStreamingPlaylistVideo, MVideo, MVideoFile, MVideoFileStreamingPlaylistVideo, MVideoFileVideo } from '@server/types/models'
 import { buildUUID } from '@shared/extra-utils'
 import { VideoStorage } from '@shared/models'
 import { makeHLSFileAvailable, makeWebTorrentFileAvailable } from './object-storage'
 import { getHLSDirectory, getHLSRedundancyDirectory, getHlsResolutionPlaylistFilename } from './paths'
+import { isVideoInPrivateDirectory } from './video-privacy'
 
 type MakeAvailableCB <T> = (path: string) => Promise<T> | T
 
@@ -23,7 +18,7 @@ class VideoPathManager {
 
   private constructor () {}
 
-  getFSHLSOutputPath (video: MVideoUUID, filename?: string) {
+  getFSHLSOutputPath (video: MVideo, filename?: string) {
     const base = getHLSDirectory(video)
     if (!filename) return base
 
@@ -41,13 +36,17 @@ class VideoPathManager {
   }
 
   getFSVideoFileOutputPath (videoOrPlaylist: MVideo | MStreamingPlaylistVideo, videoFile: MVideoFile) {
-    if (videoFile.isHLS()) {
-      const video = extractVideo(videoOrPlaylist)
+    const video = extractVideo(videoOrPlaylist)
 
+    if (videoFile.isHLS()) {
       return join(getHLSDirectory(video), videoFile.filename)
     }
 
-    return join(CONFIG.STORAGE.VIDEOS_DIR, videoFile.filename)
+    if (isVideoInPrivateDirectory(video.privacy)) {
+      return join(DIRECTORIES.VIDEOS.PRIVATE, videoFile.filename)
+    }
+
+    return join(DIRECTORIES.VIDEOS.PUBLIC, videoFile.filename)
   }
 
   async makeAvailableVideoFile <T> (videoFile: MVideoFileVideo | MVideoFileStreamingPlaylistVideo, cb: MakeAvailableCB<T>) {

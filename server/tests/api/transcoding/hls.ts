@@ -72,8 +72,8 @@ async function checkHlsPlaylist (options: {
 
       expect(file.resolution.label).to.equal(resolution + 'p')
 
-      await makeRawRequest(file.torrentUrl, HttpStatusCode.OK_200)
-      await makeRawRequest(file.fileUrl, HttpStatusCode.OK_200)
+      await makeRawRequest({ url: file.torrentUrl, expectedStatus: HttpStatusCode.OK_200 })
+      await makeRawRequest({ url: file.fileUrl, expectedStatus: HttpStatusCode.OK_200 })
 
       const torrent = await webtorrentAdd(file.magnetUri, true)
       expect(torrent.files).to.be.an('array')

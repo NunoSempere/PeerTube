@@ -2,6 +2,7 @@ import { Request, Response } from 'express'
 import { isUUIDValid } from '@server/helpers/custom-validators/misc'
 import { loadVideo, VideoLoadType } from '@server/lib/model-loaders'
 import { isAbleToUploadVideo } from '@server/lib/user'
+import { VideoTokensManager } from '@server/lib/video-tokens-manager'
 import { authenticatePromise } from '@server/middlewares/auth'
 import { VideoModel } from '@server/models/video/video'
 import { VideoChannelModel } from '@server/models/video/video-channel'
@@ -108,18 +109,17 @@ async function checkCanSeeVideo (options: {
   res: Response
   paramId: string
   video: MVideo
-  authenticateInQuery?: boolean // default false
 }) {
-  const { req, res, video, paramId, authenticateInQuery = false } = options
+  const { req, res, video, paramId } = options
 
   if (video.requiresAuth()) {
-    return checkCanSeeAuthVideo(req, res, video, authenticateInQuery)
+    return checkCanSeeAuthVideo(req, res, video)
   }
 
   if (video.privacy === VideoPrivacy.UNLISTED) {
     if (isUUIDValid(paramId)) return true
 
-    return checkCanSeeAuthVideo(req, res, video, authenticateInQuery)
+    return checkCanSeeAuthVideo(req, res, video)
   }
 
   if (video.privacy === VideoPrivacy.PUBLIC) return true
@@ -127,7 +127,7 @@ async function checkCanSeeVideo (options: {
   throw new Error('Fatal error when checking video right ' + video.url)
 }
 
-async function checkCanSeeAuthVideo (req: Request, res: Response, video: MVideoId | MVideoWithRights, authenticateInQuery = false) {
+async function checkCanSeeAuthVideo (req: Request, res: Response, video: MVideoId | MVideoWithRights) {
   const fail = () => {
     res.fail({
       status: HttpStatusCode.FORBIDDEN_403,
@@ -137,7 +137,7 @@ async function checkCanSeeAuthVideo (req: Request, res: Response, video: MVideoI
     return false
   }
 
-  await authenticatePromise(req, res, authenticateInQuery)
+  await authenticatePromise(req, res)
 
   const user = res.locals.oauth?.token.User
   if (!user) return fail()
@@ -169,6 +169,34 @@ async function checkCanSeeAuthVideo (req: Request, res: Response, video: MVideoI
 
   // Should not happen
   return fail()
+}
+
+// ---------------------------------------------------------------------------
+
+async function checkCanAccessVideoStaticFiles (options: {
+  video: MVideo
+  req: Request
+  res: Response
+  paramId: string
+}) {
+  const { video, req, res } = options
+
+  if (res.locals.oauth?.token.User) {
+    return checkCanSeeVideo(options)
+  }
+
+  const videoFileToken = req.query.videoFileToken
+  if (!videoFileToken) {
+    res.sendStatus(HttpStatusCode.FORBIDDEN_403)
+    return false
+  }
+
+  if (VideoTokensManager.Instance.hasToken({ token: videoFileToken, videoUUID: video.uuid })) {
+    return true
+  }
+
+  res.sendStatus(HttpStatusCode.FORBIDDEN_403)
+  return false
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +248,7 @@ export {
   doesVideoExist,
   doesVideoFileOfVideoExist,
 
+  checkCanAccessVideoStaticFiles,
   checkUserCanManageVideo,
   checkCanSeeVideo,
   checkUserQuota

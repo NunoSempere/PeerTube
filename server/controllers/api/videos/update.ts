@@ -1,12 +1,12 @@
 import express from 'express'
 import { Transaction } from 'sequelize/types'
 import { changeVideoChannelShare } from '@server/lib/activitypub/share'
-import { CreateJobArgument, JobQueue } from '@server/lib/job-queue'
-import { buildVideoThumbnailsFromReq, setVideoTags } from '@server/lib/video'
+import { addVideoJobsAfterUpdate, buildVideoThumbnailsFromReq, setVideoTags } from '@server/lib/video'
+import { setVideoPrivacy } from '@server/lib/video-privacy'
 import { openapiOperationDoc } from '@server/middlewares/doc'
 import { FilteredModelAttributes } from '@server/types'
 import { MVideoFullLight } from '@server/types/models'
-import { HttpStatusCode, ManageVideoTorrentPayload, VideoUpdate } from '@shared/models'
+import { HttpStatusCode, VideoUpdate } from '@shared/models'
 import { auditLoggerFactory, getAuditIdFromRes, VideoAuditView } from '../../../helpers/audit-logger'
 import { resetSequelizeInstance } from '../../../helpers/database-utils'
 import { createReqFiles } from '../../../helpers/express-utils'
@@ -47,8 +47,8 @@ async function updateVideo (req: express.Request, res: express.Response) {
   const oldVideoAuditView = new VideoAuditView(videoFromReq.toFormattedDetailsJSON())
   const videoInfoToUpdate: VideoUpdate = req.body
 
-  const wasConfidentialVideo = videoFromReq.isConfidential()
   const hadPrivacyForFederation = videoFromReq.hasPrivacyForFederation()
+  const oldPrivacy = videoFromReq.privacy
 
   const [ thumbnailModel, previewModel ] = await buildVideoThumbnailsFromReq({
     video: videoFromReq,
@@ -62,7 +62,6 @@ async function updateVideo (req: express.Request, res: express.Response) {
       // Refresh video since thumbnails to prevent concurrent updates
       const video = await VideoModel.loadFull(videoFromReq.id, t)
 
-      const sequelizeOptions = { transaction: t }
       const oldVideoChannel = video.VideoChannel
 
       const keysToUpdate: (keyof VideoUpdate & FilteredModelAttributes<VideoModel>)[] = [
@@ -97,7 +96,7 @@ async function updateVideo (req: express.Request, res: express.Response) {
         await video.setAsRefreshed(t)
       }
 
-      const videoInstanceUpdated = await video.save(sequelizeOptions) as MVideoFullLight
+      const videoInstanceUpdated = await video.save({ transaction: t }) as MVideoFullLight
 
       // Thumbnail & preview updates?
       if (thumbnailModel) await videoInstanceUpdated.addAndSaveThumbnail(thumbnailModel, t)
@@ -113,7 +112,9 @@ async function updateVideo (req: express.Request, res: express.Response) {
         await videoInstanceUpdated.$set('VideoChannel', res.locals.videoChannel, { transaction: t })
         videoInstanceUpdated.VideoChannel = res.locals.videoChannel
 
-        if (hadPrivacyForFederation === true) await changeVideoChannelShare(videoInstanceUpdated, oldVideoChannel, t)
+        if (hadPrivacyForFederation === true) {
+          await changeVideoChannelShare(videoInstanceUpdated, oldVideoChannel, t)
+        }
       }
 
       // Schedule an update in the future?
@@ -139,7 +140,12 @@ async function updateVideo (req: express.Request, res: express.Response) {
 
     Hooks.runAction('action:api.video.updated', { video: videoInstanceUpdated, body: req.body, req, res })
 
-    await addVideoJobsAfterUpdate({ video: videoInstanceUpdated, videoInfoToUpdate, wasConfidentialVideo, isNewVideo })
+    await addVideoJobsAfterUpdate({
+      video: videoInstanceUpdated,
+      nameChanged: !!videoInfoToUpdate.name,
+      oldPrivacy,
+      isNewVideo
+    })
   } catch (err) {
     // Force fields we want to update
     // If the transaction is retried, sequelize will think the object has not changed
@@ -164,7 +170,7 @@ async function updateVideoPrivacy (options: {
   const isNewVideo = videoInstance.isNewVideo(videoInfoToUpdate.privacy)
 
   const newPrivacy = parseInt(videoInfoToUpdate.privacy.toString(), 10)
-  videoInstance.setPrivacy(newPrivacy)
+  setVideoPrivacy(videoInstance, newPrivacy)
 
   // Unfederate the video if the new privacy is not compatible with federation
   if (hadPrivacyForFederation && !videoInstance.hasPrivacyForFederation()) {
@@ -184,51 +190,4 @@ function updateSchedule (videoInstance: MVideoFullLight, videoInfoToUpdate: Vide
   } else if (videoInfoToUpdate.scheduleUpdate === null) {
     return ScheduleVideoUpdateModel.deleteByVideoId(videoInstance.id, transaction)
   }
-}
-
-async function addVideoJobsAfterUpdate (options: {
-  video: MVideoFullLight
-  videoInfoToUpdate: VideoUpdate
-  wasConfidentialVideo: boolean
-  isNewVideo: boolean
-}) {
-  const { video, videoInfoToUpdate, wasConfidentialVideo, isNewVideo } = options
-  const jobs: CreateJobArgument[] = []
-
-  if (!video.isLive && videoInfoToUpdate.name) {
-
-    for (const file of (video.VideoFiles || [])) {
-      const payload: ManageVideoTorrentPayload = { action: 'update-metadata', videoId: video.id, videoFileId: file.id }
-
-      jobs.push({ type: 'manage-video-torrent', payload })
-    }
-
-    const hls = video.getHLSPlaylist()
-
-    for (const file of (hls?.VideoFiles || [])) {
-      const payload: ManageVideoTorrentPayload = { action: 'update-metadata', streamingPlaylistId: hls.id, videoFileId: file.id }
-
-      jobs.push({ type: 'manage-video-torrent', payload })
-    }
-  }
-
-  jobs.push({
-    type: 'federate-video',
-    payload: {
-      videoUUID: video.uuid,
-      isNewVideo
-    }
-  })
-
-  if (wasConfidentialVideo) {
-    jobs.push({
-      type: 'notify',
-      payload: {
-        action: 'new-video',
-        videoUUID: video.uuid
-      }
-    })
-  }
-
-  return JobQueue.Instance.createSequentialJobFlow(...jobs)
 }

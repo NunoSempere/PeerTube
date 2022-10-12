@@ -4,6 +4,7 @@ import { logger } from '@root-helpers/logger'
 import { isIOS } from '@root-helpers/web-browser'
 import { timeToInt } from '@shared/core-utils'
 import { VideoFile } from '@shared/models'
+import { addQueryParams } from '../../../../root-helpers'
 import { getAverageBandwidthInStore, getStoredMute, getStoredVolume, saveAverageBandwidth } from '../../peertube-player-local-storage'
 import { PeerTubeResolution, PlayerNetworkInfo, WebtorrentPluginOptions } from '../../types'
 import { getRtcConfig, videoFileMaxByResolution, videoFileMinByResolution } from '../common'
@@ -38,6 +39,8 @@ class WebTorrentPlugin extends Plugin {
     BANDWIDTH_AVERAGE_NUMBER_OF_VALUES: 5 // Last 5 seconds to build average bandwidth
   }
 
+  private readonly buildWebSeedUrls: (file: VideoFile) => string[]
+
   private readonly webtorrent = new WebTorrent({
     tracker: {
       rtcConfig: getRtcConfig()
@@ -56,6 +59,9 @@ class WebTorrentPlugin extends Plugin {
   private autoResolutionPossible = true
   private isAutoResolutionObservation = false
   private playerRefusedP2P = false
+
+  private requiresAuth: boolean
+  private videoFileToken: () => string
 
   private torrentInfoInterval: any
   private autoQualityInterval: any
@@ -80,6 +86,11 @@ class WebTorrentPlugin extends Plugin {
 
     this.savePlayerSrcFunction = this.player.src
     this.playerElement = options.playerElement
+
+    this.requiresAuth = options.requiresAuth
+    this.videoFileToken = options.videoFileToken
+
+    this.buildWebSeedUrls = options.buildWebSeedUrls
 
     this.player.ready(() => {
       const playerOptions = this.player.options_
@@ -268,7 +279,8 @@ class WebTorrentPlugin extends Plugin {
         return new CacheChunkStore(new PeertubeChunkStore(chunkLength, storeOpts), {
           max: 100
         })
-      }
+      },
+      urlList: this.buildWebSeedUrls(this.currentVideoFile)
     }
 
     this.torrent = this.webtorrent.add(magnetOrTorrentUrl, torrentOptions, torrent => {
@@ -533,7 +545,12 @@ class WebTorrentPlugin extends Plugin {
     // Enable error display now this is our last fallback
     this.player.one('error', () => this.player.peertube().displayFatalError())
 
-    const httpUrl = this.currentVideoFile.fileUrl
+    let httpUrl = this.currentVideoFile.fileUrl
+
+    if (this.requiresAuth && this.videoFileToken) {
+      httpUrl = addQueryParams(httpUrl, { videoFileToken: this.videoFileToken() })
+    }
+
     this.player.src = this.savePlayerSrcFunction
     this.player.src(httpUrl)
 
